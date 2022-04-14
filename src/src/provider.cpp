@@ -22,6 +22,7 @@
  * IN THE SOFTWARE.
  */
 
+#include <QNetworkInterface>
 #include <qmdnsengine/abstractserver.h>
 #include <qmdnsengine/dns.h>
 #include <qmdnsengine/hostname.h>
@@ -36,13 +37,7 @@
 using namespace QMdnsEngine;
 
 ProviderPrivate::ProviderPrivate(QObject *parent, AbstractServer *server, Hostname *hostname)
-    : QObject(parent),
-      server(server),
-      hostname(hostname),
-      prober(nullptr),
-      initialized(false),
-      confirmed(false)
-{
+    : QObject(parent), server(server), hostname(hostname), prober(nullptr), initialized(false), confirmed(false) {
     connect(server, &AbstractServer::messageReceived, this, &ProviderPrivate::onMessageReceived);
     connect(hostname, &Hostname::hostnameChanged, this, &ProviderPrivate::onHostnameChanged);
 
@@ -53,15 +48,13 @@ ProviderPrivate::ProviderPrivate(QObject *parent, AbstractServer *server, Hostna
     txtProposed.setType(TXT);
 }
 
-ProviderPrivate::~ProviderPrivate()
-{
+ProviderPrivate::~ProviderPrivate() {
     if (confirmed) {
         farewell();
     }
 }
 
-void ProviderPrivate::announce()
-{
+void ProviderPrivate::announce() {
     // Broadcast a message with each of the records
 
     Message message;
@@ -72,8 +65,7 @@ void ProviderPrivate::announce()
     server->sendMessageToAll(message);
 }
 
-void ProviderPrivate::confirm()
-{
+void ProviderPrivate::confirm() {
     // Confirm that the desired name is unique through probing
 
     if (prober) {
@@ -81,7 +73,6 @@ void ProviderPrivate::confirm()
     }
     prober = new Prober(server, srvProposed, this);
     connect(prober, &Prober::nameConfirmed, [this](const QByteArray &name) {
-
         // If existing records were confirmed, indicate that they are no
         // longer valid
         if (confirmed) {
@@ -103,8 +94,7 @@ void ProviderPrivate::confirm()
     });
 }
 
-void ProviderPrivate::farewell()
-{
+void ProviderPrivate::farewell() {
     // Send a message indicating that the existing records are no longer valid
     // by setting their TTL to 0
 
@@ -114,19 +104,45 @@ void ProviderPrivate::farewell()
     announce();
 }
 
-void ProviderPrivate::publish()
-{
+void ProviderPrivate::publish() {
     // Copy the proposed records over and announce them
 
     browsePtrRecord = browsePtrProposed;
     ptrRecord = ptrProposed;
     srvRecord = srvProposed;
     txtRecord = txtProposed;
+
+    // zwift
+    ARecord.setType(A);
+    ARecord.setName(srvRecord.target());
+    // set directly when we receive a message
+    // ARecord.setAddress(QHostAddress("172.31.100.161"));
+
     announce();
 }
 
-void ProviderPrivate::onMessageReceived(const Message &message)
-{
+QHostAddress ProviderPrivate::getIP(const QHostAddress &srcAddress) {
+    // Attempt to find the interface that corresponds with the provided
+    // address and determine this device's address from the interface
+
+    const auto interfaces = QNetworkInterface::allInterfaces();
+    for (const QNetworkInterface &networkInterface : interfaces) {
+        const auto entries = networkInterface.addressEntries();
+        for (const QNetworkAddressEntry &entry : entries) {
+            if (srcAddress.isInSubnet(entry.ip(), entry.prefixLength())) {
+                for (const QNetworkAddressEntry &newEntry : entries) {
+                    QHostAddress address = newEntry.ip();
+                    if ((address.protocol() == QAbstractSocket::IPv4Protocol)) {
+                        return address;
+                    }
+                }
+            }
+        }
+    }
+    return QHostAddress();
+}
+
+void ProviderPrivate::onMessageReceived(const Message &message) {
     if (!confirmed || message.isResponse()) {
         return;
     }
@@ -135,6 +151,8 @@ void ProviderPrivate::onMessageReceived(const Message &message)
     bool sendPtr = false;
     bool sendSrv = false;
     bool sendTxt = false;
+
+    ARecord.setAddress(getIP(message.address()));
 
     // Determine which records to send based on the queries
     const auto queries = message.queries();
@@ -179,6 +197,9 @@ void ProviderPrivate::onMessageReceived(const Message &message)
         }
         if (sendSrv) {
             reply.addRecord(srvRecord);
+
+            // zwift need it
+            reply.addRecord(ARecord);
         }
         if (sendTxt) {
             reply.addRecord(txtRecord);
@@ -187,8 +208,7 @@ void ProviderPrivate::onMessageReceived(const Message &message)
     }
 }
 
-void ProviderPrivate::onHostnameChanged(const QByteArray &newHostname)
-{
+void ProviderPrivate::onHostnameChanged(const QByteArray &newHostname) {
     // Update the proposed SRV record
     srvProposed.setTarget(newHostname);
 
@@ -199,13 +219,9 @@ void ProviderPrivate::onHostnameChanged(const QByteArray &newHostname)
 }
 
 Provider::Provider(AbstractServer *server, Hostname *hostname, QObject *parent)
-    : QObject(parent),
-      d(new ProviderPrivate(this, server, hostname))
-{
-}
+    : QObject(parent), d(new ProviderPrivate(this, server, hostname)) {}
 
-void Provider::update(const Service &service)
-{
+void Provider::update(const Service &service) {
     d->initialized = true;
 
     // Clean the service name
